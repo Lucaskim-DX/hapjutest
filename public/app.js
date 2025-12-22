@@ -47,13 +47,29 @@ const audioConfig = {
     autoBitrate: false // Adaptive Bitrate Control
 };
 
-// ICE Servers
+// ICE Servers - Multiple STUN/TURN for reliability
 const iceServers = [
+    // Google STUN servers
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+
+    // Additional public STUN servers
+    { urls: 'stun:stun.stunprotocol.org:3478' },
+    { urls: 'stun:stun.voip.blackberry.com:3478' },
+
+    // Metered TURN servers (free tier)
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+
+    // Relay Metered additional endpoints
+    { urls: 'turn:relay.metered.ca:80', username: 'e7b03e59a7c92d87a77d3b64', credential: 'PEvMEwBIvQHWZa0e' },
+    { urls: 'turn:relay.metered.ca:443', username: 'e7b03e59a7c92d87a77d3b64', credential: 'PEvMEwBIvQHWZa0e' },
+    { urls: 'turn:relay.metered.ca:443?transport=tcp', username: 'e7b03e59a7c92d87a77d3b64', credential: 'PEvMEwBIvQHWZa0e' }
 ];
 
 // DOM

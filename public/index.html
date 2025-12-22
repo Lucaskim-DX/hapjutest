@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebRTC Mesh - Ultimate</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .monitor-panel {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+
+    .monitor-panel h3 {
+      margin-bottom: 12px;
+      color: var(--accent-cyan);
+    }
+
+    .monitor-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .monitor-item {
+      background: rgba(0, 0, 0, 0.2);
+      padding: 10px;
+      border-radius: 8px;
+    }
+
+    .monitor-item .label {
+      font-size: 10px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    .monitor-item .value {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent-green);
+    }
+
+    .monitor-item .value.warning {
+      color: var(--accent-yellow);
+    }
+
+    .monitor-item .value.danger {
+      color: var(--accent-red);
+    }
+
+    .mini-graph {
+      width: 100%;
+      height: 40px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+
+    .perf-toggle {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🎵 WebRTC Mesh - Performance Edition</h1>
+
+    <div class="card controls">
+      <input type="text" id="roomId" placeholder="Room ID" value="test-room" style="width:110px">
+      <input type="text" id="nickname" placeholder="Nick" style="width:80px">
+      <input type="password" id="roomPwd" placeholder="Pwd" style="width:70px">
+      <select id="micSelect" style="width:140px"></select>
+      <button class="btn-primary" id="joinBtn" onclick="joinRoom()">🚀 Join</button>
+      <button class="btn-success" onclick="createRoom()">➕ Create</button>
+      <button class="btn-secondary" id="audioBtn" onclick="toggleAudio()" disabled>🎤 Mute</button>
+      <button class="btn-secondary" id="recordBtn" onclick="toggleRec()" disabled>⏺️ Rec</button>
+      <button class="btn-secondary" id="screenBtn" onclick="toggleScreen()">🖥️ Share</button>
+      <button class="btn-danger" id="leaveBtn" onclick="leaveRoom()" disabled>🚪 Leave</button>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span id="connCount"
+          style="background:var(--accent-cyan);padding:4px 12px;border-radius:10px;font-weight:700">0</span>
+      </div>
+    </div>
+
+    <div class="recording-badge" id="recBadge"><span class="rec-dot"></span> REC <span id="recTime">00:00</span></div>
+
+    <div class="screen-container" id="screenContainer" style="display:none;margin-bottom:15px">
+      <video id="screenVideo" autoplay muted></video>
+    </div>
+
+    <div class="main-grid">
+      <div>
+        <div class="peer-card local">
+          <div class="peer-header">
+            <div class="peer-name">📊 Local</div>
+          </div>
+          <div class="volume-meter"><span>🎤</span>
+            <div class="volume-bar-bg">
+              <div class="volume-bar" id="localVolBar"></div>
+            </div>
+          </div>
+          <div id="localStatus" class="stats">Not connected</div>
+        </div>
+
+        <h2>👥 Peers</h2>
+        <div id="peers" class="peers"></div>
+      </div>
+
+      <div class="sidebar">
+        <!-- Performance Monitor -->
+        <div class="monitor-panel">
+          <h3>📈 Performance Monitor</h3>
+
+          <div class="perf-toggle">
+            <span>Low Latency Mode</span>
+            <div class="toggle-switch on" id="lowLatencyToggle"></div>
+          </div>
+
+          <div class="monitor-grid">
+            <div class="monitor-item">
+              <div class="label">Uptime</div>
+              <div class="value" id="monUptime">0m 0s</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Peers</div>
+              <div class="value" id="monPeers">0</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Avg Latency</div>
+              <div class="value" id="monAvgLat">- ms</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Peak Latency</div>
+              <div class="value" id="monPeakLat">- ms</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Min Latency</div>
+              <div class="value" id="monMinLat">- ms</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Jitter</div>
+              <div class="value" id="monJitter">- ms</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Packet Loss</div>
+              <div class="value" id="monLoss">0</div>
+            </div>
+            <div class="monitor-item">
+              <div class="label">Bitrate</div>
+              <div class="value" id="monBitrate">64 kbps</div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px">
+            <div class="label" style="font-size:10px;color:var(--text-secondary);margin-bottom:4px">Latency History
+            </div>
+            <canvas id="latencyGraph" class="mini-graph" width="260" height="40"></canvas>
+          </div>
+          <div style="margin-top:8px">
+            <div class="label" style="font-size:10px;color:var(--text-secondary);margin-bottom:4px">Bitrate History
+            </div>
+            <canvas id="bitrateGraph" class="mini-graph" width="260" height="40"></canvas>
+          </div>
+
+          <div style="margin-top:10px;font-size:11px;color:var(--text-secondary)">
+            Memory: <span id="monMemory">-</span>
+          </div>
+        </div>
+
+        <!-- Host Controls -->
+        <div class="card" id="hostControls" style="display:none">
+          <h3>👑 Host</h3>
+          <div style="margin-bottom:10px">
+            <label style="font-size:11px;color:var(--text-secondary)">Max Peers</label>
+            <input type="number" id="maxPeers" value="12" min="2" max="20" style="width:60px">
+          </div>
+          <div style="margin-bottom:10px">
+            <label style="font-size:11px;color:var(--text-secondary)">Password</label>
+            <input type="password" id="roomPwdSet" placeholder="Optional" style="width:100%">
+          </div>
+          <div class="toggle">
+            <span>Waiting Room</span>
+            <div class="toggle-switch" id="waitingRoom" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="waiting-list" id="waitingList" style="margin-top:10px"></div>
+        </div>
+
+        <!-- Metronome -->
+        <div class="card metronome">
+          <h3>🥁 Metronome</h3>
+          <div class="metronome-display" id="bpmDisplay">120</div>
+          <div class="metronome-beat">
+            <div class="beat-dot"></div>
+            <div class="beat-dot"></div>
+            <div class="beat-dot"></div>
+            <div class="beat-dot"></div>
+          </div>
+          <div class="bpm-control">
+            <button class="btn-secondary" onclick="changeBpm(-5)">-5</button>
+            <input type="number" id="bpmInput" value="120" min="40" max="240" style="width:60px;text-align:center">
+            <button class="btn-secondary" onclick="changeBpm(5)">+5</button>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">
+            <button class="btn-success" onclick="startMetronome()">▶</button>
+            <button class="btn-danger" onclick="stopMetronome()">■</button>
+          </div>
+        </div>
+
+        <!-- Audio Settings -->
+        <div class="card">
+          <h3>🎛️ Audio Settings</h3>
+
+          <div class="volume-slider">
+            <span>Master</span>
+            <input type="range" id="masterVol" min="0" max="100" value="100">
+            <span id="masterVolVal">100%</span>
+          </div>
+
+          <div style="margin-top:15px;border-top:1px solid var(--border-color);padding-top:12px">
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px">🎤 마이크 처리</div>
+
+            <div class="toggle">
+              <span>에코 캔슬링</span>
+              <div class="toggle-switch on" id="toggleEcho" onclick="toggleAudioSetting('echo')"></div>
+            </div>
+            <div class="toggle">
+              <span>노이즈 제거</span>
+              <div class="toggle-switch on" id="toggleNoise" onclick="toggleAudioSetting('noise')"></div>
+            </div>
+            <div class="toggle">
+              <span>자동 게인(AGC)</span>
+              <div class="toggle-switch on" id="toggleAGC" onclick="toggleAudioSetting('agc')"></div>
+            </div>
+          </div>
+
+          <div style="margin-top:15px;border-top:1px solid var(--border-color);padding-top:12px">
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px">📡 코덱 설정</div>
+
+            <div class="toggle">
+              <span>DTX (무음 최적화)</span>
+              <div class="toggle-switch" id="toggleDTX" onclick="toggleAudioSetting('dtx')"></div>
+            </div>
+            <div class="toggle">
+              <span>CBR (일정 비트레이트)</span>
+              <div class="toggle-switch on" id="toggleCBR" onclick="toggleAudioSetting('cbr')"></div>
+            </div>
+            <div class="toggle">
+              <span>FEC (오류 복구)</span>
+              <div class="toggle-switch on" id="toggleFEC" onclick="toggleAudioSetting('fec')"></div>
+            </div>
+          </div>
+
+          <div style="margin-top:15px;border-top:1px solid var(--border-color);padding-top:12px">
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px">⚡ 성능</div>
+
+            <div class="toggle">
+              <span>저지연 모드</span>
+              <div class="toggle-switch on" id="lowLatencyToggle" onclick="toggleAudioSetting('lowLatency')"></div>
+            </div>
+
+            <div style="margin-top:10px">
+              <label style="font-size:11px;color:var(--text-secondary)">비트레이트</label>
+              <select id="bitrateSelect" onchange="changeBitrate(this.value)" style="width:100%;margin-top:4px">
+                <option value="32000">32 kbps (저품질)</option>
+                <option value="48000">48 kbps (중품질)</option>
+                <option value="64000" selected>64 kbps (고품질)</option>
+                <option value="96000">96 kbps (최고품질)</option>
+                <option value="0">자동 (ABR)</option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            style="margin-top:12px;padding:8px;background:rgba(0,0,0,0.2);border-radius:6px;font-size:10px;color:var(--text-secondary)">
+            ⚠️ 일부 설정은 재연결 시 적용됩니다
+          </div>
+        </div>
+
+        <!-- Chat -->
+        <div class="card">
+          <h3>💬 Chat</h3>
+          <div class="chat-container">
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input">
+              <input type="text" id="chatInput" placeholder="..." onkeypress="if(event.key==='Enter')sendChat()">
+              <button class="btn-primary" onclick="sendChat()">↵</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>

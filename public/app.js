@@ -1,5 +1,6 @@
 // app.js - Performance Optimized with Audio Worklet Support
-const WS_URL = `ws://${location.host}`;
+const WS_PROTOCOL = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = `${WS_PROTOCOL}//${location.host}`;
 let ws, peerId = `peer-${Date.now()}`, roomId, nickname, localStream;
 let isHost = false, hostId = null;
 const peers = {}, peerInfos = {}, statsIntervals = {}, gainNodes = {};

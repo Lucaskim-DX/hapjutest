@@ -1,9 +1,5 @@
 // utils.js - 유틸리티 함수들
-
-// DOM 헬퍼 (app.js에서 선언되지 않은 경우에만)
-if (typeof $ === 'undefined') {
-    var $ = id => document.getElementById(id);
-}
+// $ 함수는 app.js에서 정의됨
 
 // 보안 환경 체크 (HTTPS 또는 localhost 필요)
 function isSecureContext() {

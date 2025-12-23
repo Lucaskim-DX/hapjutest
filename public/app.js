@@ -11,6 +11,8 @@ let systemAudioStream = null; // 시스템 오디오 스트림
 let mixedStream = null; // 마이크 + 시스템 오디오 믹싱
 let micGainNode = null; // 마이크 볼륨 조절용
 let systemGainNode = null; // 시스템 오디오 볼륨 조절용
+let systemAudioAnalyser = null; // 시스템 오디오 분석용
+let systemMeterAnimationId = null; // 애니메이션 ID
 
 // Audio Worklet support
 let audioWorkletReady = false;
@@ -1097,6 +1099,13 @@ function stopSystemAudio() {
     // Gain 노드 정리
     micGainNode = null;
     systemGainNode = null;
+    systemAudioAnalyser = null;
+
+    // 볼륨 미터 애니메이션 중지
+    if (systemMeterAnimationId) {
+        cancelAnimationFrame(systemMeterAnimationId);
+        systemMeterAnimationId = null;
+    }
 
     // 기존 연결들의 트랙 교체
     if (localStream) {
@@ -1119,6 +1128,12 @@ function stopSystemAudio() {
     const volumePresets = $('volumePresets');
     if (volumePresets) {
         volumePresets.style.display = 'none';
+    }
+
+    // 시스템 오디오 볼륨 미터 숨김
+    const systemVolMeter = $('systemVolMeter');
+    if (systemVolMeter) {
+        systemVolMeter.style.display = 'none';
     }
 
     $('systemAudioBtn').textContent = '🔊 Share System Audio';
@@ -1152,7 +1167,14 @@ async function mixAudioStreams() {
     // UI에서 설정된 볼륨 값 적용
     const systemVolValue = parseInt($('systemVol')?.value || 70) / 100;
     systemGainNode.gain.value = systemVolValue;
+
+    // 시스템 오디오 분석기 추가 (볼륨 미터용)
+    systemAudioAnalyser = audioContext.createAnalyser();
+    systemAudioAnalyser.fftSize = 256;
+    systemAudioAnalyser.smoothingTimeConstant = 0.3;
+
     systemSource.connect(systemGainNode);
+    systemGainNode.connect(systemAudioAnalyser); // 분석기 연결
     systemGainNode.connect(destination);
 
     // 믹싱된 스트림
@@ -1180,8 +1202,62 @@ async function mixAudioStreams() {
         volumePresets.style.display = 'block';
     }
 
+    // 시스템 오디오 볼륨 미터 표시 및 시작
+    const systemVolMeter = $('systemVolMeter');
+    if (systemVolMeter) {
+        systemVolMeter.style.display = 'flex';
+    }
+    startSystemAudioMeter();
+
     console.log('Audio streams mixed: mic + system audio');
 }
+
+// 시스템 오디오 볼륨 미터
+function startSystemAudioMeter() {
+    if (!systemAudioAnalyser) return;
+
+    const dataArray = new Uint8Array(systemAudioAnalyser.frequencyBinCount);
+    const systemVolBar = $('systemVolBar');
+    const systemAudioStatus = $('systemAudioStatus');
+
+    function updateMeter() {
+        if (!systemAudioAnalyser) {
+            // 분석기가 없으면 중지
+            cancelAnimationFrame(systemMeterAnimationId);
+            return;
+        }
+
+        systemAudioAnalyser.getByteFrequencyData(dataArray);
+
+        // RMS 계산
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const average = sum / dataArray.length;
+        const volume = Math.min(100, (average / 128) * 100);
+
+        // 볼륨 바 업데이트
+        if (systemVolBar) {
+            systemVolBar.style.width = volume + '%';
+        }
+
+        // 오디오 활성 상태 표시 (소리가 감지되면 깜빡임)
+        if (systemAudioStatus) {
+            if (volume > 5) {
+                // 소리 감지됨
+                systemAudioStatus.style.color = 'var(--accent-green)';
+                systemAudioStatus.style.opacity = '1';
+            } else {
+                // 소리 없음
+                systemAudioStatus.style.color = 'var(--text-secondary)';
+                systemAudioStatus.style.opacity = '0.3';
+            }
+        }
+
+        systemMeterAnimationId = requestAnimationFrame(updateMeter);
+    }
+
+    updateMeter();
+}
+
 
 // 마이크 볼륨 조절
 function updateMicVolume(value) {

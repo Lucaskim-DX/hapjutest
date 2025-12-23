@@ -1019,14 +1019,30 @@ function updateRecTime() {
 // Screen Share
 async function toggleScreen() {
     if (screenStream) { stopScreen(); return; }
+
+    // 시스템 오디오가 이미 활성화되어 있는지 확인
+    if (systemAudioStream) {
+        showToast('시스템 오디오를 먼저 중지해주세요', 'error');
+        return;
+    }
+
     try {
-        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false  // 화면 공유는 비디오만 (오디오는 시스템 오디오 공유 사용)
+        });
         $('screenVideo').srcObject = screenStream;
         $('screenContainer').style.display = 'block';
         $('screenBtn').textContent = '🖥️ Stop';
+        $('screenBtn').classList.add('active');
         wsSend('screen-share-started');
         screenStream.getVideoTracks()[0].onended = stopScreen;
-    } catch (e) { console.error(e); }
+    } catch (e) {
+        console.error('Screen share failed:', e);
+        if (e.name === 'NotAllowedError') {
+            showToast('화면 공유가 거부되었습니다', 'error');
+        }
+    }
 }
 
 function stopScreen() {
@@ -1034,6 +1050,7 @@ function stopScreen() {
     screenStream = null;
     $('screenContainer').style.display = 'none';
     $('screenBtn').textContent = '🖥️ Share';
+    $('screenBtn').classList.remove('active');
     wsSend('screen-share-stopped');
 }
 
@@ -1045,6 +1062,12 @@ async function toggleSystemAudio() {
     }
 
     try {
+        // 화면 공유가 이미 활성화되어 있는지 확인
+        if (screenStream) {
+            showToast('화면 공유를 먼저 중지해주세요', 'error');
+            return;
+        }
+
         // Chrome/Edge에서 시스템 오디오 캡처
         // audio: true를 설정하면 시스템 오디오 공유 옵션이 나타남
         const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1064,8 +1087,23 @@ async function toggleSystemAudio() {
             return;
         }
 
-        // 비디오 트랙은 중지 (오디오만 필요)
-        stream.getVideoTracks().forEach(t => t.stop());
+        // 비디오 트랙 처리
+        const videoTracks = stream.getVideoTracks();
+        if (videoTracks.length > 0) {
+            // 비디오 트랙이 있으면 화면 공유로 전환
+            screenStream = stream;
+            $('screenVideo').srcObject = screenStream;
+            $('screenContainer').style.display = 'block';
+            $('screenBtn').textContent = '🖥️ Stop';
+            $('screenBtn').classList.add('active');
+            wsSend('screen-share-started');
+
+            // 비디오 트랙 종료 시 처리
+            videoTracks[0].onended = () => {
+                stopScreen();
+                stopSystemAudio();
+            };
+        }
 
         // 오디오 트랙만으로 새 스트림 생성
         systemAudioStream = new MediaStream(audioTracks);
@@ -1082,7 +1120,11 @@ async function toggleSystemAudio() {
 
     } catch (e) {
         console.error('System audio capture failed:', e);
-        showToast('시스템 오디오 캡처 실패: ' + e.message, 'error');
+        if (e.name === 'NotAllowedError') {
+            showToast('시스템 오디오 공유가 거부되었습니다', 'error');
+        } else {
+            showToast('시스템 오디오 캡처 실패: ' + e.message, 'error');
+        }
     }
 }
 
@@ -1134,6 +1176,11 @@ function stopSystemAudio() {
     const systemVolMeter = $('systemVolMeter');
     if (systemVolMeter) {
         systemVolMeter.style.display = 'none';
+    }
+
+    // 화면 공유도 함께 중지 (시스템 오디오와 함께 시작된 경우)
+    if (screenStream) {
+        stopScreen();
     }
 
     $('systemAudioBtn').textContent = '🔊 Share System Audio';

@@ -9,6 +9,8 @@ let mediaRecorder, recordedChunks = [], recordingStart;
 let screenStream = null;
 let systemAudioStream = null; // 시스템 오디오 스트림
 let mixedStream = null; // 마이크 + 시스템 오디오 믹싱
+let micGainNode = null; // 마이크 볼륨 조절용
+let systemGainNode = null; // 시스템 오디오 볼륨 조절용
 
 // Audio Worklet support
 let audioWorkletReady = false;
@@ -1092,6 +1094,10 @@ function stopSystemAudio() {
         mixedStream = null;
     }
 
+    // Gain 노드 정리
+    micGainNode = null;
+    systemGainNode = null;
+
     // 기존 연결들의 트랙 교체
     if (localStream) {
         Object.values(peers).forEach(pc => {
@@ -1101,6 +1107,18 @@ function stopSystemAudio() {
                 audioSender.replaceTrack(localStream.getAudioTracks()[0]);
             }
         });
+    }
+
+    // 시스템 오디오 볼륨 슬라이더 숨김
+    const systemVolSlider = $('systemVolSlider');
+    if (systemVolSlider) {
+        systemVolSlider.style.display = 'none';
+    }
+
+    // 볼륨 프리셋 버튼 숨김
+    const volumePresets = $('volumePresets');
+    if (volumePresets) {
+        volumePresets.style.display = 'none';
     }
 
     $('systemAudioBtn').textContent = '🔊 Share System Audio';
@@ -1121,17 +1139,21 @@ async function mixAudioStreams() {
 
     // 마이크 소스
     const micSource = audioContext.createMediaStreamSource(localStream);
-    const micGain = audioContext.createGain();
-    micGain.gain.value = 1.0; // 마이크 볼륨
-    micSource.connect(micGain);
-    micGain.connect(destination);
+    micGainNode = audioContext.createGain();
+    // UI에서 설정된 볼륨 값 적용
+    const micVolValue = parseInt($('micVol')?.value || 100) / 100;
+    micGainNode.gain.value = micVolValue;
+    micSource.connect(micGainNode);
+    micGainNode.connect(destination);
 
     // 시스템 오디오 소스
     const systemSource = audioContext.createMediaStreamSource(systemAudioStream);
-    const systemGain = audioContext.createGain();
-    systemGain.gain.value = 0.7; // 시스템 오디오 볼륨 (약간 낮춤)
-    systemSource.connect(systemGain);
-    systemGain.connect(destination);
+    systemGainNode = audioContext.createGain();
+    // UI에서 설정된 볼륨 값 적용
+    const systemVolValue = parseInt($('systemVol')?.value || 70) / 100;
+    systemGainNode.gain.value = systemVolValue;
+    systemSource.connect(systemGainNode);
+    systemGainNode.connect(destination);
 
     // 믹싱된 스트림
     mixedStream = destination.stream;
@@ -1146,7 +1168,98 @@ async function mixAudioStreams() {
         }
     });
 
+    // 시스템 오디오 볼륨 슬라이더 표시
+    const systemVolSlider = $('systemVolSlider');
+    if (systemVolSlider) {
+        systemVolSlider.style.display = 'flex';
+    }
+
+    // 볼륨 프리셋 버튼 표시
+    const volumePresets = $('volumePresets');
+    if (volumePresets) {
+        volumePresets.style.display = 'block';
+    }
+
     console.log('Audio streams mixed: mic + system audio');
+}
+
+// 마이크 볼륨 조절
+function updateMicVolume(value) {
+    const volPercent = parseInt(value);
+    const volValue = volPercent / 100;
+
+    // UI 업데이트
+    const volLabel = $('micVolVal');
+    if (volLabel) {
+        volLabel.textContent = volPercent + '%';
+    }
+
+    // 믹싱 중일 때만 Gain 노드 조절
+    if (micGainNode) {
+        micGainNode.gain.value = volValue;
+        console.log(`Mic volume: ${volPercent}%`);
+    }
+}
+
+// 시스템 오디오 볼륨 조절
+function updateSystemVolume(value) {
+    const volPercent = parseInt(value);
+    const volValue = volPercent / 100;
+
+    // UI 업데이트
+    const volLabel = $('systemVolVal');
+    if (volLabel) {
+        volLabel.textContent = volPercent + '%';
+    }
+
+    // 믹싱 중일 때만 Gain 노드 조절
+    if (systemGainNode) {
+        systemGainNode.gain.value = volValue;
+        console.log(`System audio volume: ${volPercent}%`);
+    }
+}
+
+
+// 볼륨 프리셋 적용
+function applyVolumePreset(preset) {
+    let micVol, systemVol;
+
+    switch (preset) {
+        case 'balanced':
+            // 균형 잡힌 설정
+            micVol = 100;
+            systemVol = 50;
+            showToast('균형 모드: 마이크 100%, 시스템 50%', 'info');
+            break;
+        case 'music':
+            // 음악 중심
+            micVol = 80;
+            systemVol = 100;
+            showToast('음악 모드: 마이크 80%, 시스템 100%', 'info');
+            break;
+        case 'voice':
+            // 마이크 중심
+            micVol = 120;
+            systemVol = 40;
+            showToast('마이크 모드: 마이크 120%, 시스템 40%', 'info');
+            break;
+        default:
+            return;
+    }
+
+    // 슬라이더 값 설정
+    const micSlider = $('micVol');
+    const systemSlider = $('systemVol');
+
+    if (micSlider) {
+        micSlider.value = micVol;
+        updateMicVolume(micVol);
+    }
+
+    if (systemSlider) {
+        systemSlider.value = systemVol;
+        updateSystemVolume(systemVol);
+    }
 }
 
 // Chat

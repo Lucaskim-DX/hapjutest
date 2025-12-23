@@ -229,6 +229,37 @@
             <span id="masterVolVal">100%</span>
           </div>
 
+          <!-- 개별 볼륨 조절 -->
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border-color)">
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">🎚️ 개별 볼륨</div>
+
+            <div class="volume-slider">
+              <span>🎤 마이크</span>
+              <input type="range" id="micVol" min="0" max="150" value="100" oninput="updateMicVolume(this.value)">
+              <span id="micVolVal">100%</span>
+            </div>
+
+            <div class="volume-slider" id="systemVolSlider" style="display:none">
+              <span>🔊 시스템</span>
+              <input type="range" id="systemVol" min="0" max="150" value="70" oninput="updateSystemVolume(this.value)">
+              <span id="systemVolVal">70%</span>
+            </div>
+
+            <!-- 볼륨 프리셋 -->
+            <div id="volumePresets"
+              style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.05)">
+              <div style="font-size:10px;color:var(--text-secondary);margin-bottom:5px">빠른 조정</div>
+              <div style="display:flex;gap:5px;flex-wrap:wrap">
+                <button class="btn-secondary" onclick="applyVolumePreset('balanced')"
+                  style="padding:4px 8px;font-size:10px">균형</button>
+                <button class="btn-secondary" onclick="applyVolumePreset('music')"
+                  style="padding:4px 8px;font-size:10px">음악↑</button>
+                <button class="btn-secondary" onclick="applyVolumePreset('voice')"
+                  style="padding:4px 8px;font-size:10px">마이크↑</button>
+              </div>
+            </div>
+          </div>
+
           <div style="margin-top:15px;border-top:1px solid var(--border-color);padding-top:12px">
             <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px">🎤 마이크 처리</div>
 

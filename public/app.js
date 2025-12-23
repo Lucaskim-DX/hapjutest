@@ -7,6 +7,8 @@ const peers = {}, peerInfos = {}, statsIntervals = {}, gainNodes = {};
 let audioContext, metronomeInterval, currentBeat = 0;
 let mediaRecorder, recordedChunks = [], recordingStart;
 let screenStream = null;
+let systemAudioStream = null; // 시스템 오디오 스트림
+let mixedStream = null; // 마이크 + 시스템 오디오 믹싱
 
 // Audio Worklet support
 let audioWorkletReady = false;
@@ -337,6 +339,12 @@ async function getLocalStream() {
             latency: audioConfig.lowLatencyMode ? 0.01 : 0.1
         }
     });
+
+    // 시스템 오디오가 활성화되어 있으면 믹싱
+    if (systemAudioStream) {
+        await mixAudioStreams();
+    }
+
     startLocalMeter();
     audioBtn.disabled = false;
     $('recordBtn').disabled = false;
@@ -1025,6 +1033,122 @@ function stopScreen() {
     wsSend('screen-share-stopped');
 }
 
+// System Audio Share (컴퓨터 소리 공유)
+async function toggleSystemAudio() {
+    if (systemAudioStream) {
+        stopSystemAudio();
+        return;
+    }
+
+    try {
+        // Chrome/Edge에서 시스템 오디오 캡처
+        // audio: true를 설정하면 시스템 오디오 공유 옵션이 나타남
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,  // 비디오도 필수로 요청해야 오디오 옵션이 나타남
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
+        });
+
+        // 오디오 트랙만 추출
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+            showToast('시스템 오디오가 선택되지 않았습니다', 'error');
+            stream.getTracks().forEach(t => t.stop());
+            return;
+        }
+
+        // 비디오 트랙은 중지 (오디오만 필요)
+        stream.getVideoTracks().forEach(t => t.stop());
+
+        // 오디오 트랙만으로 새 스트림 생성
+        systemAudioStream = new MediaStream(audioTracks);
+
+        // 마이크와 믹싱
+        await mixAudioStreams();
+
+        $('systemAudioBtn').textContent = '🔊 Stop System Audio';
+        $('systemAudioBtn').classList.add('active');
+        showToast('시스템 오디오 공유 시작', 'success');
+
+        // 오디오 트랙이 종료되면 자동으로 정리
+        audioTracks[0].onended = stopSystemAudio;
+
+    } catch (e) {
+        console.error('System audio capture failed:', e);
+        showToast('시스템 오디오 캡처 실패: ' + e.message, 'error');
+    }
+}
+
+function stopSystemAudio() {
+    systemAudioStream?.getTracks().forEach(t => t.stop());
+    systemAudioStream = null;
+
+    // 믹싱 중지하고 원래 마이크 스트림으로 복원
+    if (mixedStream) {
+        mixedStream.getTracks().forEach(t => t.stop());
+        mixedStream = null;
+    }
+
+    // 기존 연결들의 트랙 교체
+    if (localStream) {
+        Object.values(peers).forEach(pc => {
+            const senders = pc.getSenders();
+            const audioSender = senders.find(s => s.track?.kind === 'audio');
+            if (audioSender && localStream.getAudioTracks()[0]) {
+                audioSender.replaceTrack(localStream.getAudioTracks()[0]);
+            }
+        });
+    }
+
+    $('systemAudioBtn').textContent = '🔊 Share System Audio';
+    $('systemAudioBtn').classList.remove('active');
+    showToast('시스템 오디오 공유 중지', 'info');
+}
+
+// 마이크와 시스템 오디오 믹싱
+async function mixAudioStreams() {
+    if (!localStream || !systemAudioStream) return;
+
+    // Web Audio API로 믹싱
+    if (!audioContext) {
+        audioContext = new AudioContext({ latencyHint: 'interactive' });
+    }
+
+    const destination = audioContext.createMediaStreamDestination();
+
+    // 마이크 소스
+    const micSource = audioContext.createMediaStreamSource(localStream);
+    const micGain = audioContext.createGain();
+    micGain.gain.value = 1.0; // 마이크 볼륨
+    micSource.connect(micGain);
+    micGain.connect(destination);
+
+    // 시스템 오디오 소스
+    const systemSource = audioContext.createMediaStreamSource(systemAudioStream);
+    const systemGain = audioContext.createGain();
+    systemGain.gain.value = 0.7; // 시스템 오디오 볼륨 (약간 낮춤)
+    systemSource.connect(systemGain);
+    systemGain.connect(destination);
+
+    // 믹싱된 스트림
+    mixedStream = destination.stream;
+
+    // 기존 연결들의 오디오 트랙을 믹싱된 트랙으로 교체
+    const mixedAudioTrack = mixedStream.getAudioTracks()[0];
+    Object.values(peers).forEach(pc => {
+        const senders = pc.getSenders();
+        const audioSender = senders.find(s => s.track?.kind === 'audio');
+        if (audioSender) {
+            audioSender.replaceTrack(mixedAudioTrack);
+        }
+    });
+
+    console.log('Audio streams mixed: mic + system audio');
+}
+
 // Chat
 function sendChat() {
     const msg = chatIn.value.trim();
@@ -1130,6 +1254,7 @@ function leaveRoom() {
     stopMetronomeLocal();
     stopRec();
     stopScreen();
+    stopSystemAudio(); // 시스템 오디오 정리
     resetUI();
 }
 

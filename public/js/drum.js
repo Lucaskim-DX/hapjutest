@@ -1,13 +1,14 @@
-// drum.js - 가상 드럼 악기 모듈
+// drum.js - 가상 드럼 악기 모듈 (피어 전송 지원)
 // Web Audio API를 사용하여 드럼 사운드를 재생하고 피어에게 전송
 
-// 드럼 샘플 버퍼 저장
-const drumBuffers = {};
+// 드럼 전용 변수
 let drumContext = null;
 let drumGainNode = null;
-let drumDestination = null;
+let drumStreamDestination = null;  // 피어 전송용
+let drumMixedStream = null;        // 드럼 + 마이크 믹싱 스트림
+let originalMicStream = null;      // 원래 마이크 스트림 백업
 
-// 드럼 사운드 정의 (Web Audio API로 합성)
+// 드럼 사운드 정의
 const DRUM_SOUNDS = {
     kick: { name: '킥 (베이스)', frequency: 60, decay: 0.5, type: 'sine' },
     snare: { name: '스네어', frequency: 200, decay: 0.2, type: 'triangle', noise: true },
@@ -17,9 +18,9 @@ const DRUM_SOUNDS = {
     rim: { name: '림샷', frequency: 500, decay: 0.08, type: 'square' }
 };
 
-// 드럼 모듈 초기화
+// 드럼 모듈 초기화 (피어 전송 지원)
 function initDrum() {
-    if (drumContext) return;
+    if (drumContext && drumStreamDestination) return;
 
     // audioContext가 이미 있으면 재사용
     if (typeof audioContext !== 'undefined' && audioContext) {
@@ -34,10 +35,74 @@ function initDrum() {
     drumGainNode = drumContext.createGain();
     drumGainNode.gain.value = 0.8;
 
-    // 목적지 설정 (스피커 출력)
+    // 1. 로컬 스피커 출력
     drumGainNode.connect(drumContext.destination);
 
-    console.log('Drum module initialized');
+    // 2. 피어 전송용 MediaStreamDestination 생성
+    drumStreamDestination = drumContext.createMediaStreamDestination();
+    drumGainNode.connect(drumStreamDestination);
+
+    console.log('Drum module initialized with peer transmission support');
+
+    // 드럼을 마이크 스트림과 믹싱
+    mixDrumWithMic();
+}
+
+// 드럼 스트림을 마이크와 믹싱하여 피어에게 전송
+function mixDrumWithMic() {
+    // localStream이 없으면 대기
+    if (typeof localStream === 'undefined' || !localStream) {
+        console.log('Waiting for localStream to mix drum audio...');
+        setTimeout(mixDrumWithMic, 1000);
+        return;
+    }
+
+    if (!drumStreamDestination) {
+        console.warn('Drum stream destination not ready');
+        return;
+    }
+
+    // 이미 믹싱 중이면 스킵
+    if (drumMixedStream) {
+        console.log('Drum already mixed with mic');
+        return;
+    }
+
+    try {
+        // 믹싱 전용 destination 생성
+        const mixDestination = drumContext.createMediaStreamDestination();
+
+        // 마이크 소스 연결
+        const micSource = drumContext.createMediaStreamSource(localStream);
+        const micGain = drumContext.createGain();
+        micGain.gain.value = 1.0;
+        micSource.connect(micGain);
+        micGain.connect(mixDestination);
+
+        // 드럼 게인 노드를 믹스 destination에도 연결
+        drumGainNode.connect(mixDestination);
+
+        drumMixedStream = mixDestination.stream;
+        originalMicStream = localStream;
+
+        // 기존 피어 연결에 믹싱된 트랙 교체
+        const mixedAudioTrack = drumMixedStream.getAudioTracks()[0];
+        if (typeof peers !== 'undefined') {
+            Object.values(peers).forEach(pc => {
+                const senders = pc.getSenders();
+                const audioSender = senders.find(s => s.track?.kind === 'audio');
+                if (audioSender) {
+                    audioSender.replaceTrack(mixedAudioTrack);
+                }
+            });
+        }
+
+        console.log('Drum audio mixed with microphone and sent to peers');
+        showToast('드럼 오디오가 피어에게 전송됩니다', 'success');
+
+    } catch (e) {
+        console.error('Failed to mix drum with mic:', e);
+    }
 }
 
 // 킥 드럼 합성
@@ -237,6 +302,11 @@ function playDrum(soundName = 'kick') {
         drumContext.resume();
     }
 
+    // 믹싱이 안 되어 있으면 시도
+    if (!drumMixedStream && typeof localStream !== 'undefined' && localStream) {
+        mixDrumWithMic();
+    }
+
     const time = drumContext.currentTime;
 
     switch (soundName) {
@@ -286,6 +356,9 @@ function showDrumFeedback(soundName) {
 
 // 드럼 UI 동적 추가
 function addDrumUI() {
+    // 이미 추가되어 있으면 스킵
+    if (document.getElementById('drumCard')) return;
+
     // 오디오 설정 카드 다음에 드럼 카드 추가
     const syncCard = document.querySelector('.sidebar .card:has(#globalBuffer)');
     const targetCard = syncCard || document.querySelector('.sidebar .card:has(#chatMessages)');
@@ -335,7 +408,11 @@ function addDrumUI() {
             <span id="drumVolVal">80%</span>
         </div>
         
-        <div style="margin-top:10px;font-size:10px;color:var(--text-secondary)">
+        <div style="margin-top:8px;padding:6px;background:rgba(0,255,0,0.1);border-radius:4px;font-size:10px;color:var(--accent-green)">
+            ✅ 드럼 소리가 피어에게 전송됩니다
+        </div>
+        
+        <div style="margin-top:6px;font-size:10px;color:var(--text-secondary)">
             💡 키보드: Q/W/E/R/T/Y로 연주 가능
         </div>
     `;
@@ -410,6 +487,29 @@ function setupDrumKeyboard() {
     });
 
     console.log('Drum keyboard shortcuts enabled: Q/W/E/R/T/Y');
+}
+
+// 드럼 믹싱 정리 (방 나갈 때 호출)
+function cleanupDrum() {
+    if (drumMixedStream) {
+        drumMixedStream.getTracks().forEach(t => t.stop());
+        drumMixedStream = null;
+    }
+
+    // 원래 마이크 스트림 복원
+    if (originalMicStream && typeof peers !== 'undefined') {
+        const audioTrack = originalMicStream.getAudioTracks()[0];
+        Object.values(peers).forEach(pc => {
+            const senders = pc.getSenders();
+            const audioSender = senders.find(s => s.track?.kind === 'audio');
+            if (audioSender && audioTrack) {
+                audioSender.replaceTrack(audioTrack);
+            }
+        });
+    }
+
+    originalMicStream = null;
+    console.log('Drum audio cleaned up');
 }
 
 // 초기화

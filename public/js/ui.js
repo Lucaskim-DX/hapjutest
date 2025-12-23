@@ -28,7 +28,12 @@ function createPeerCard(rid, nick) {
 function updatePeerStats(rid, stats) {
     const el = $(`stats-${rid}`);
     if (el) {
-        el.innerHTML = stats;
+        // stats가 객체인 경우 포맷팅
+        if (typeof stats === 'object') {
+            el.innerHTML = `${stats.lat}ms | ${stats.jit}ms jitter | ${stats.loss}% loss`;
+        } else {
+            el.innerHTML = stats;
+        }
     }
 }
 
@@ -74,18 +79,6 @@ function toggleAudioSetting(setting) {
             audioConfig.lowLatencyMode = !audioConfig.lowLatencyMode;
             $('toggleLowLatency').classList.toggle('on');
             break;
-    }
-}
-
-// 성능 모니터 업데이트
-function updatePerfMonitor() {
-    const now = performance.now();
-    const fps = Math.round(1000 / (now - (window.lastPerfTime || now)));
-    window.lastPerfTime = now;
-
-    const perfEl = $('perfFps');
-    if (perfEl) {
-        perfEl.textContent = fps;
     }
 }
 

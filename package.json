@@ -1,6 +1,6 @@
 {
   "name": "webrtc-mesh-test",
-  "version": "4.4.0",
+  "version": "4.6.0",
   "description": "WebRTC Mesh (P2P) Audio Test with Real-time Monitoring and System Audio Sharing",
   "main": "server.js",
   "scripts": {

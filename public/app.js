@@ -434,9 +434,53 @@ async function createPC(rid, init) {
     });
     peers[rid] = pc;
 
-    localStream?.getTracks().forEach(t => pc.addTrack(t, localStream));
+    // 오디오 트랙 추가 (마이크 또는 믹싱된 오디오)
+    if (mixedStream) {
+        // 시스템 오디오와 믹싱된 스트림 사용
+        mixedStream.getTracks().forEach(t => pc.addTrack(t, mixedStream));
+    } else if (localStream) {
+        // 일반 마이크 스트림 사용
+        localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    }
 
-    pc.ontrack = e => setupRemoteAudio(rid, e.streams[0]);
+
+    // 화면 공유 트랙 추가 (있는 경우) - 오디오 우선 설정
+    if (screenStream) {
+        const videoTrack = screenStream.getVideoTracks()[0];
+        const sender = pc.addTrack(videoTrack, screenStream);
+
+        // 비디오 인코딩 파라미터 설정 (오디오 우선)
+        setTimeout(async () => {
+            try {
+                const params = sender.getParameters();
+                if (!params.encodings) {
+                    params.encodings = [{}];
+                }
+
+                params.encodings[0].maxBitrate = 500000;  // 500 Kbps
+                params.encodings[0].priority = 'low';
+                params.encodings[0].networkPriority = 'low';
+
+                await sender.setParameters(params);
+                console.log(`Video encoding optimized for peer ${rid}`);
+            } catch (e) {
+                console.warn('Failed to set video parameters:', e);
+            }
+        }, 100);  // 연결 설정 후 적용
+    }
+
+    pc.ontrack = e => {
+        const track = e.track;
+        const stream = e.streams[0];
+
+        if (track.kind === 'audio') {
+            // 오디오 트랙 처리
+            setupRemoteAudio(rid, stream);
+        } else if (track.kind === 'video') {
+            // 비디오 트랙 처리 (화면 공유)
+            setupRemoteVideo(rid, stream);
+        }
+    };
 
     // ICE Candidate with batching and filtering
     pc.onicecandidate = e => {
@@ -585,6 +629,41 @@ function flushIceCandidates(rid) {
     // Clear queue
     iceBatchQueues[rid] = [];
     clearTimeout(iceBatchTimers[rid]);
+}
+
+// Remote Video (Screen Share)
+function setupRemoteVideo(rid, stream) {
+    let videoContainer = $(`video-container-${rid}`);
+
+    if (!videoContainer) {
+        // 비디오 컨테이너 생성
+        videoContainer = document.createElement('div');
+        videoContainer.id = `video-container-${rid}`;
+        videoContainer.className = 'remote-video-container';
+        videoContainer.style.cssText = 'margin-top:10px;background:#000;border-radius:8px;overflow:hidden;';
+
+        const video = document.createElement('video');
+        video.id = `video-${rid}`;
+        video.autoplay = true;
+        video.style.cssText = 'width:100%;max-height:200px;object-fit:contain;';
+        video.srcObject = stream;
+
+        videoContainer.appendChild(video);
+
+        // 피어 카드에 추가
+        const peerCard = $(`peer-${rid}`);
+        if (peerCard) {
+            peerCard.appendChild(videoContainer);
+        }
+    } else {
+        // 기존 비디오 업데이트
+        const video = $(`video-${rid}`);
+        if (video) {
+            video.srcObject = stream;
+        }
+    }
+
+    console.log(`Remote video setup for peer ${rid}`);
 }
 
 // Audio with Audio Worklet (low latency) or fallback to Web Audio API
@@ -1028,7 +1107,11 @@ async function toggleScreen() {
 
     try {
         screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
+            video: {
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 15, max: 30 }  // 낮은 프레임레이트로 대역폭 절약
+            },
             audio: false  // 화면 공유는 비디오만 (오디오는 시스템 오디오 공유 사용)
         });
         $('screenVideo').srcObject = screenStream;
@@ -1036,7 +1119,33 @@ async function toggleScreen() {
         $('screenBtn').textContent = '🖥️ Stop';
         $('screenBtn').classList.add('active');
         wsSend('screen-share-started');
+
+        // 기존 연결에 비디오 트랙 추가 (낮은 우선순위 및 비트레이트 제한)
+        const videoTrack = screenStream.getVideoTracks()[0];
+        Object.values(peers).forEach(async pc => {
+            const sender = pc.addTrack(videoTrack, screenStream);
+
+            // 비디오 인코딩 파라미터 설정 (오디오 우선)
+            const params = sender.getParameters();
+            if (!params.encodings) {
+                params.encodings = [{}];
+            }
+
+            // 비트레이트 제한 (500 Kbps 최대)
+            params.encodings[0].maxBitrate = 500000;  // 500 Kbps
+            params.encodings[0].priority = 'low';     // 낮은 우선순위
+            params.encodings[0].networkPriority = 'low';
+
+            try {
+                await sender.setParameters(params);
+                console.log('Video encoding optimized for audio priority');
+            } catch (e) {
+                console.warn('Failed to set video parameters:', e);
+            }
+        });
+
         screenStream.getVideoTracks()[0].onended = stopScreen;
+        console.log('Screen sharing started with audio-priority optimization');
     } catch (e) {
         console.error('Screen share failed:', e);
         if (e.name === 'NotAllowedError') {
@@ -1047,11 +1156,25 @@ async function toggleScreen() {
 
 function stopScreen() {
     screenStream?.getTracks().forEach(t => t.stop());
+
+    // 기존 연결에서 비디오 트랙 제거
+    if (screenStream) {
+        const videoTrack = screenStream.getVideoTracks()[0];
+        Object.values(peers).forEach(pc => {
+            const senders = pc.getSenders();
+            const videoSender = senders.find(s => s.track === videoTrack);
+            if (videoSender) {
+                pc.removeTrack(videoSender);
+            }
+        });
+    }
+
     screenStream = null;
     $('screenContainer').style.display = 'none';
     $('screenBtn').textContent = '🖥️ Share';
     $('screenBtn').classList.remove('active');
     wsSend('screen-share-stopped');
+    console.log('Screen sharing stopped and removed from all peers');
 }
 
 // System Audio Share (컴퓨터 소리 공유)

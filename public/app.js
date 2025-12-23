@@ -23,6 +23,15 @@ const iceBatchQueues = {}; // Queue per peer
 const ICE_BATCH_DELAY = 50; // ms to wait before sending batch
 const iceBatchTimers = {};
 
+// Sync/Latency Compensation (지연 보정)
+const syncConfig = {
+    globalBuffer: 50,      // 글로벌 버퍼 (ms) - 모든 피어 오디오 지연
+    autoBuffer: false,     // 자동 버퍼 모드 (RTT 기반)
+    maxBuffer: 200         // 최대 버퍼 (ms)
+};
+const peerDelayNodes = {};  // { peerId: DelayNode }
+const peerOffsets = {};     // { peerId: offset in ms }
+
 // Performance Monitoring
 const perfData = {
     startTime: Date.now(),
@@ -173,7 +182,22 @@ async function init() {
 // Initialize Audio Worklet
 async function initAudioWorklet() {
     try {
+        // AudioContext가 없거나 audioWorklet을 지원하지 않으면 스킵
+        if (typeof AudioContext === 'undefined') {
+            console.warn('AudioContext not supported');
+            audioWorkletReady = false;
+            return;
+        }
+
         audioContext = new AudioContext({ latencyHint: 'interactive' });
+
+        // audioWorklet 지원 여부 확인
+        if (!audioContext.audioWorklet) {
+            console.warn('Audio Worklet not supported in this browser/context');
+            audioWorkletReady = false;
+            return;
+        }
+
         await audioContext.audioWorklet.addModule('audio-worklet-processor.js');
         audioWorkletReady = true;
         console.log('Audio Worklet initialized successfully');
@@ -310,10 +334,19 @@ async function reapplyMicSettings() {
 
 async function loadMics() {
     try {
+        // mediaDevices API 지원 여부 확인 (보안 컨텍스트 필요)
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.warn('mediaDevices API not available - requires HTTPS or localhost');
+            if (micSelect) {
+                micSelect.innerHTML = '<option value="">마이크 사용 불가 (HTTPS 필요)</option>';
+            }
+            return;
+        }
+
         await navigator.mediaDevices.getUserMedia({ audio: true });
         const devs = await navigator.mediaDevices.enumerateDevices();
         micSelect.innerHTML = devs.filter(d => d.kind === 'audioinput').map((d, i) => `<option value="${d.deviceId}">${d.label || 'Mic ' + (i + 1)}</option>`).join('');
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error('Failed to load microphones:', e); }
 }
 
 // SDP Optimization for Opus Codec
@@ -401,6 +434,12 @@ function getRoomSettings() {
 }
 
 async function getLocalStream() {
+    // mediaDevices API 지원 여부 확인 (보안 컨텍스트 필요)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('마이크 사용 불가: HTTPS 또는 localhost에서 접속해주세요', 'error');
+        throw new Error('mediaDevices API not available - requires HTTPS or localhost');
+    }
+
     localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
             deviceId: micSelect.value ? { exact: micSelect.value } : undefined,
@@ -630,6 +669,9 @@ function closePC(rid) {
     delete iceBatchTimers[rid];
     delete gainNodes[rid];
     delete workletNodes[rid];
+    // Sync cleanup
+    delete peerDelayNodes[rid];
+    delete peerOffsets[rid];
     $(`audio-${rid}`)?.remove();
     $(`peer-${rid}`)?.remove();
 }
@@ -761,9 +803,15 @@ function setupRemoteAudio(rid, stream) {
     audio.muted = true;
 }
 
-// Audio Worklet pipeline (low latency)
+// Audio Worklet pipeline (low latency) with Delay for sync
 async function setupAudioWorkletPipeline(rid, src) {
     try {
+        // Delay node for latency compensation (지연 보정)
+        const delayNode = audioContext.createDelay(0.5); // 최대 500ms
+        const bufferMs = syncConfig.globalBuffer + (peerOffsets[rid] || 0);
+        delayNode.delayTime.value = Math.max(0, bufferMs) / 1000;
+        peerDelayNodes[rid] = delayNode;
+
         // Volume meter worklet
         const meterNode = new AudioWorkletNode(audioContext, 'volume-meter-processor');
         meterNode.port.onmessage = (event) => {
@@ -776,34 +824,43 @@ async function setupAudioWorkletPipeline(rid, src) {
         // Smooth gain worklet
         const gainNode = new AudioWorkletNode(audioContext, 'smooth-gain-processor');
 
-        // Connect: source -> meter -> gain -> destination
-        src.connect(meterNode);
-        src.connect(gainNode);
+        // Connect: source -> delay -> meter -> gain -> destination
+        src.connect(delayNode);
+        delayNode.connect(meterNode);
+        delayNode.connect(gainNode);
         gainNode.connect(audioContext.destination);
 
         // Store for volume control
-        workletNodes[rid] = { meter: meterNode, gain: gainNode };
+        workletNodes[rid] = { meter: meterNode, gain: gainNode, delay: delayNode };
         gainNodes[rid] = {
             gain: { value: 1 },
             setGain: (v) => gainNode.port.postMessage({ type: 'setGain', gain: v })
         };
 
-        console.log(`Audio Worklet pipeline set up for peer ${rid}`);
+        console.log(`Audio Worklet pipeline with ${bufferMs}ms delay set up for peer ${rid}`);
     } catch (e) {
         console.warn('Audio Worklet failed, falling back:', e);
         setupStandardAudioPipeline(rid, src);
     }
 }
 
-// Standard Web Audio API pipeline (fallback)
+// Standard Web Audio API pipeline (fallback) with Delay for sync
 function setupStandardAudioPipeline(rid, src) {
+    // Delay node for latency compensation (지연 보정)
+    const delayNode = audioContext.createDelay(0.5); // 최대 500ms
+    const bufferMs = syncConfig.globalBuffer + (peerOffsets[rid] || 0);
+    delayNode.delayTime.value = Math.max(0, bufferMs) / 1000;
+    peerDelayNodes[rid] = delayNode;
+
     const gain = audioContext.createGain();
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
     analyser.smoothingTimeConstant = 0.3;
 
-    src.connect(analyser);
-    src.connect(gain);
+    // Connect: source -> delay -> analyser/gain -> destination
+    src.connect(delayNode);
+    delayNode.connect(analyser);
+    delayNode.connect(gain);
     gain.connect(audioContext.destination);
     gainNodes[rid] = gain;
 
@@ -822,6 +879,7 @@ function setupStandardAudioPipeline(rid, src) {
         animationId = requestAnimationFrame(meter);
     }
     meter();
+    console.log(`Standard audio pipeline with ${bufferMs}ms delay set up for peer ${rid}`);
 }
 
 // Local meter with Audio Worklet support
@@ -1809,5 +1867,101 @@ function startSystemAudioMeter() {
     updateMeter();
 }
 
+// ==========================================
+// Sync/Latency Compensation Functions (동기화 설정)
+// ==========================================
+
+// 글로벌 버퍼 설정 (모든 피어에 적용)
+function setGlobalBuffer(ms) {
+    const value = Math.max(0, Math.min(syncConfig.maxBuffer, parseInt(ms) || 0));
+    syncConfig.globalBuffer = value;
+
+    // 모든 피어의 DelayNode 업데이트
+    Object.entries(peerDelayNodes).forEach(([rid, delay]) => {
+        const offset = peerOffsets[rid] || 0;
+        const totalDelay = Math.max(0, value + offset) / 1000;
+        delay.delayTime.setValueAtTime(totalDelay, audioContext.currentTime);
+    });
+
+    // UI 업데이트
+    const label = $('globalBufferVal');
+    if (label) label.textContent = value + 'ms';
+
+    console.log(`Global buffer set to ${value}ms`);
+}
+
+// 피어별 오프셋 설정
+function setPeerOffset(rid, ms) {
+    const value = parseInt(ms) || 0;
+    peerOffsets[rid] = value;
+
+    if (peerDelayNodes[rid]) {
+        const totalDelay = Math.max(0, syncConfig.globalBuffer + value) / 1000;
+        peerDelayNodes[rid].delayTime.setValueAtTime(totalDelay, audioContext.currentTime);
+    }
+
+    // UI 업데이트
+    const label = $(`offsetVal-${rid}`);
+    if (label) label.textContent = (value >= 0 ? '+' : '') + value + 'ms';
+
+    console.log(`Peer ${rid} offset set to ${value}ms`);
+}
+
+// 자동 버퍼 토글
+function toggleAutoBuffer() {
+    syncConfig.autoBuffer = !syncConfig.autoBuffer;
+    const el = $('autoBufferToggle');
+    if (el) el.classList.toggle('on', syncConfig.autoBuffer);
+
+    if (syncConfig.autoBuffer) {
+        // 현재 평균 지연 기반으로 버퍼 계산
+        calculateAutoBuffer();
+        showToast('자동 버퍼 활성화', 'info');
+    } else {
+        showToast('수동 버퍼 모드', 'info');
+    }
+}
+
+// RTT 기반 자동 버퍼 계산
+function calculateAutoBuffer() {
+    if (!syncConfig.autoBuffer) return;
+
+    // 모든 피어의 최대 지연을 기준으로 버퍼 계산
+    const maxLatency = perfData.peakLatency || 100;
+    const targetBuffer = Math.min(syncConfig.maxBuffer, Math.ceil(maxLatency * 1.2)); // 20% 여유
+
+    setGlobalBuffer(targetBuffer);
+
+    // 슬라이더 UI 동기화
+    const slider = $('globalBuffer');
+    if (slider) slider.value = targetBuffer;
+}
+
+// 동기화 테스트 (핑-퐁)
+function testSync() {
+    showToast('동기화 테스트 중...', 'info');
+
+    // 현재 지연 상태 표시
+    const avgLat = perfData.avgLatency.toFixed(0);
+    const peakLat = perfData.peakLatency.toFixed(0);
+    const buffer = syncConfig.globalBuffer;
+
+    setTimeout(() => {
+        showToast(`평균: ${avgLat}ms, 최대: ${peakLat}ms, 버퍼: ${buffer}ms`, 'success');
+
+        // 자동 버퍼 모드면 재계산
+        if (syncConfig.autoBuffer) {
+            calculateAutoBuffer();
+        }
+    }, 1000);
+}
+
+// 피어 연결 종료 시 정리
+function cleanupPeerSync(rid) {
+    delete peerDelayNodes[rid];
+    delete peerOffsets[rid];
+}
+
 // 모든 스크립트 로드 후 초기화
 document.addEventListener('DOMContentLoaded', init);
+

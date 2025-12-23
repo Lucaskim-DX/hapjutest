@@ -84,8 +84,77 @@ const roomInput = $('roomId'), nickInput = $('nickname'), micSelect = $('micSele
 const joinBtn = $('joinBtn'), leaveBtn = $('leaveBtn'), audioBtn = $('audioBtn');
 const peersEl = $('peers'), chatMsgs = $('chatMessages'), chatIn = $('chatInput');
 
+// 보안 환경 체크 (HTTPS 또는 localhost 필요)
+function isSecureContext() {
+    // window.isSecureContext를 먼저 확인
+    if (window.isSecureContext !== undefined) {
+        return window.isSecureContext;
+    }
+    // 폴백: 수동으로 확인
+    const protocol = location.protocol;
+    const hostname = location.hostname;
+    return protocol === 'https:' ||
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '::1';
+}
+
+function showSecurityWarning() {
+    const warning = document.createElement('div');
+    warning.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.95);
+        color: white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        font-family: 'Pretendard', sans-serif;
+        padding: 20px;
+        text-align: center;
+    `;
+    warning.innerHTML = `
+        <h1 style="color: #ff416c; margin-bottom: 20px;">🔒 HTTPS 필요</h1>
+        <p style="font-size: 18px; margin-bottom: 15px;">
+            WebRTC와 미디어 기능은 <strong>보안 연결</strong>이 필요합니다.
+        </p>
+        <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; margin: 20px 0;">
+            <p style="margin-bottom: 10px;"><strong>현재 접속:</strong> ${location.href}</p>
+            <p style="color: #ff6b6b;">❌ 비보안 연결 (HTTP)</p>
+        </div>
+        <div style="text-align: left; margin: 20px 0;">
+            <p style="font-size: 16px; margin-bottom: 10px;"><strong>✅ 해결 방법:</strong></p>
+            <ol style="margin-left: 20px; line-height: 2;">
+                <li>로컬에서 테스트: <code style="background:#333;padding:2px 6px;border-radius:4px;">http://localhost:3000</code></li>
+                <li>HTTPS로 배포 (Render, Vercel 등)</li>
+                <li>ngrok 사용: <code style="background:#333;padding:2px 6px;border-radius:4px;">ngrok http 3000</code></li>
+            </ol>
+        </div>
+        <button onclick="location.href='http://localhost:3000'" 
+                style="background: linear-gradient(135deg, #6366f1, #22d3ee); 
+                       color: white; padding: 12px 30px; border: none; 
+                       border-radius: 8px; font-size: 16px; cursor: pointer;
+                       margin-top: 20px;">
+            localhost로 이동
+        </button>
+    `;
+    document.body.appendChild(warning);
+    console.error('보안 연결 필요: HTTPS 또는 localhost에서 접속해주세요.');
+}
+
 // Init
 async function init() {
+    // 보안 환경 체크 (HTTPS 또는 localhost 필요)
+    if (!isSecureContext()) {
+        showSecurityWarning();
+        return;
+    }
+
     await loadMics();
     nickInput.value = `User${Math.floor(Math.random() * 1000)}`;
     $('masterVol').oninput = e => { $('masterVolVal').textContent = e.target.value + '%'; setMasterVol(e.target.value / 100); };
@@ -1624,6 +1693,120 @@ function resetUI() {
     $('recordBtn').disabled = true;
     peersEl.innerHTML = '';
     updateCount();
+}
+
+// 마이크 볼륨 조절
+function updateMicVolume(value) {
+    const volPercent = parseInt(value);
+    const volValue = volPercent / 100;
+
+    // UI 업데이트
+    const volLabel = $('micVolVal');
+    if (volLabel) {
+        volLabel.textContent = volPercent + '%';
+    }
+
+    // 믹싱 중일 때만 Gain 노드 조절
+    if (micGainNode) {
+        micGainNode.gain.value = volValue;
+        console.log(`Mic volume: ${volPercent}%`);
+    }
+}
+
+// 시스템 오디오 볼륨 조절
+function updateSystemVolume(value) {
+    const volPercent = parseInt(value);
+    const volValue = volPercent / 100;
+
+    // UI 업데이트
+    const volLabel = $('systemVolVal');
+    if (volLabel) {
+        volLabel.textContent = volPercent + '%';
+    }
+
+    // 믹싱 중일 때만 Gain 노드 조절
+    if (systemGainNode) {
+        systemGainNode.gain.value = volValue;
+        console.log(`System audio volume: ${volPercent}%`);
+    }
+}
+
+// 볼륨 프리셋 적용
+function applyVolumePreset(preset) {
+    let micVol, systemVol;
+
+    switch (preset) {
+        case 'balanced':
+            micVol = 100;
+            systemVol = 50;
+            showToast('균형 모드: 마이크 100%, 시스템 50%', 'info');
+            break;
+        case 'music':
+            micVol = 80;
+            systemVol = 100;
+            showToast('음악 모드: 마이크 80%, 시스템 100%', 'info');
+            break;
+        case 'voice':
+            micVol = 120;
+            systemVol = 40;
+            showToast('마이크 모드: 마이크 120%, 시스템 40%', 'info');
+            break;
+        default:
+            return;
+    }
+
+    const micSlider = $('micVol');
+    const systemSlider = $('systemVol');
+
+    if (micSlider) {
+        micSlider.value = micVol;
+        updateMicVolume(micVol);
+    }
+
+    if (systemSlider) {
+        systemSlider.value = systemVol;
+        updateSystemVolume(systemVol);
+    }
+}
+
+// 시스템 오디오 볼륨 미터
+function startSystemAudioMeter() {
+    if (!systemAudioAnalyser) return;
+
+    const dataArray = new Uint8Array(systemAudioAnalyser.frequencyBinCount);
+    const systemVolBar = $('systemVolBar');
+    const systemAudioStatus = $('systemAudioStatus');
+
+    function updateMeter() {
+        if (!systemAudioAnalyser) {
+            cancelAnimationFrame(systemMeterAnimationId);
+            return;
+        }
+
+        systemAudioAnalyser.getByteFrequencyData(dataArray);
+
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const average = sum / dataArray.length;
+        const volume = Math.min(100, (average / 128) * 100);
+
+        if (systemVolBar) {
+            systemVolBar.style.width = volume + '%';
+        }
+
+        if (systemAudioStatus) {
+            if (volume > 5) {
+                systemAudioStatus.style.color = 'var(--accent-green)';
+                systemAudioStatus.style.opacity = '1';
+            } else {
+                systemAudioStatus.style.color = 'var(--text-secondary)';
+                systemAudioStatus.style.opacity = '0.3';
+            }
+        }
+
+        systemMeterAnimationId = requestAnimationFrame(updateMeter);
+    }
+
+    updateMeter();
 }
 
 init();

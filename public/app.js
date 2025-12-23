@@ -1809,4 +1809,5 @@ function startSystemAudioMeter() {
     updateMeter();
 }
 
-init();
+// 모든 스크립트 로드 후 초기화
+document.addEventListener('DOMContentLoaded', init);
